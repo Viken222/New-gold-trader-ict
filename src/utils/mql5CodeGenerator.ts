@@ -54,6 +54,7 @@ string         g_executedSignals[];
 
 //--- Forward Function Prototypes (Ensures 0 compilation errors in MetaEditor)
 string AutoDetectGoldSymbol();
+void   ConfigureTradeFilling(string symbol);
 void   SendHeartbeat();
 void   PollAndExecuteSignals();
 void   ParseAndExecuteJson(string json);
@@ -72,7 +73,6 @@ int OnInit()
 {
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints((ulong)InpMaxSlippagePts);
-   trade.SetTypeFilling(ORDER_FILLING_FOK);
 
    // Determine gold symbol on current broker
    if(StringLen(InpSymbolOverride) > 0)
@@ -83,6 +83,9 @@ int OnInit()
    {
       g_symbol = AutoDetectGoldSymbol();
    }
+
+   // Dynamically configure broker-supported filling mode (IOC / FOK / RETURN)
+   ConfigureTradeFilling(g_symbol);
 
    if(!SymbolSelect(g_symbol, true))
    {
@@ -142,11 +145,41 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
+//| Configure broker supported filling mode                          |
+//+------------------------------------------------------------------+
+void ConfigureTradeFilling(string symbol)
+{
+   uint filling = (uint)SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
+   if((filling & SYMBOL_FILLING_IOC) != 0)
+   {
+      trade.SetTypeFilling(ORDER_FILLING_IOC);
+   }
+   else if((filling & SYMBOL_FILLING_FOK) != 0)
+   {
+      trade.SetTypeFilling(ORDER_FILLING_FOK);
+   }
+   else
+   {
+      trade.SetTypeFilling(ORDER_FILLING_RETURN);
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Auto-detect broker gold symbol naming convention                 |
 //+------------------------------------------------------------------+
 string AutoDetectGoldSymbol()
 {
-   string candidates[] = {"XAUUSD", "GOLD", "XAUUSDm", "XAUUSD.m", "XAUUSD+", "XAUUSD_i", "XAUUSDb", "PAXGUSDT"};
+   // 1. If chart symbol is already a gold asset, use it directly
+   string currentSym = _Symbol;
+   string upperSym = currentSym;
+   StringToUpper(upperSym);
+   if(StringFind(upperSym, "XAU") >= 0 || StringFind(upperSym, "GOLD") >= 0)
+   {
+      return currentSym;
+   }
+
+   // 2. Scan broker symbols for Gold
+   string candidates[] = {"XAUUSD", "GOLD", "XAUUSDm", "XAUUSD.m", "XAUUSD+", "XAUUSD_i", "XAUUSDb", "XAUUSD.raw", "XAUUSD.ecn", "PAXGUSDT"};
    for(int i = 0; i < ArraySize(candidates); i++)
    {
       if(SymbolInfoDouble(candidates[i], SYMBOL_BID) > 0)
@@ -162,22 +195,36 @@ string AutoDetectGoldSymbol()
 //+------------------------------------------------------------------+
 void PollAndExecuteSignals()
 {
-   string url = InpAppUrl + "/api/mt5/signals?token=" + InpApiToken + "&symbol=" + g_symbol;
+   string cleanUrl = InpAppUrl;
+   while(StringLen(cleanUrl) > 0 && StringSubstr(cleanUrl, StringLen(cleanUrl) - 1, 1) == "/")
+   {
+      cleanUrl = StringSubstr(cleanUrl, 0, StringLen(cleanUrl) - 1);
+   }
+
+   string url = cleanUrl + "/api/mt5/signals?token=" + InpApiToken + "&symbol=" + g_symbol;
    string headers = "User-Agent: MT5_ICT_Executor/3.0\\r\\nAccept: application/json\\r\\n";
    char postData[];
    char resultData[];
    string resultHeaders;
 
    ResetLastError();
-   int res = WebRequest("GET", url, headers, 3000, postData, resultData, resultHeaders);
+   int res = WebRequest("GET", url, headers, 3500, postData, resultData, resultHeaders);
 
    if(res == -1)
    {
       int err = GetLastError();
       if(err == 4014) // ERR_FUNCTION_NOT_ALLOWED
       {
-         PrintFormat("[ICT MT5 BOT] WebRequest Error 4014: URL '%s' is not allowed.", InpAppUrl);
-         Print("[ICT MT5 BOT] Please open MT5 -> Tools -> Options -> Expert Advisors, check 'Allow WebRequest for listed URL' and add: ", InpAppUrl);
+         PrintFormat("[ICT MT5 BOT] WebRequest Error 4014: URL '%s' is NOT whitelisted in MT5!", cleanUrl);
+         Print("[ICT MT5 BOT] FIX: Open MT5 -> Tools -> Options -> Expert Advisors -> check 'Allow WebRequest for listed URL' and add: ", cleanUrl);
+      }
+      else if(err == 4006)
+      {
+         PrintFormat("[ICT MT5 BOT] WebRequest Error 4006 (Network Failed) connecting to '%s'. Verify internet connection and URL.", cleanUrl);
+      }
+      else
+      {
+         PrintFormat("[ICT MT5 BOT] WebRequest Error %d connecting to '%s'", err, cleanUrl);
       }
       return;
    }
@@ -186,7 +233,7 @@ void PollAndExecuteSignals()
    {
       if(InpPrintVerboseLog && res != 404)
       {
-         PrintFormat("[ICT MT5 BOT] Server responded with HTTP status %d", res);
+         PrintFormat("[ICT MT5 BOT] Server responded with HTTP status %d for %s", res, url);
       }
       return;
    }
@@ -292,6 +339,9 @@ void ExecuteSignal(string signalId, string action, double entryPrice, double sl,
    PrintFormat("[ICT MT5 BOT] >>> EXECUTING NEW SIGNAL: %s | Action: %s | Lots: %.2f | Price: %.2f | SL: %.2f | TP: %.2f",
                signalId, action, lots, entryPrice, sl, finalTp);
 
+   // Ensure broker filling mode is synchronized
+   ConfigureTradeFilling(g_symbol);
+
    // Execute Market or Pending Order based on action
    if(action == "BUY" || (action == "BUY_LIMIT" && MathAbs(ask - entryPrice) <= (point * InpMaxSlippagePts)))
    {
@@ -303,6 +353,31 @@ void ExecuteSignal(string signalId, string action, double entryPrice, double sl,
       else
       {
          errorMsg = trade.ResultRetcodeDescription();
+         // Retry with alternative filling modes if broker rejected fill mode
+         if(trade.ResultRetcode() == 10030 || trade.ResultRetcode() == TRADE_RETCODE_INVALID_FILL)
+         {
+            trade.SetTypeFilling(ORDER_FILLING_IOC);
+            if(trade.Buy(lots, g_symbol, ask, sl, finalTp, orderComment))
+            {
+               success = true;
+               ticket = trade.ResultOrder();
+               errorMsg = "";
+            }
+            else
+            {
+               trade.SetTypeFilling(ORDER_FILLING_RETURN);
+               if(trade.Buy(lots, g_symbol, ask, sl, finalTp, orderComment))
+               {
+                  success = true;
+                  ticket = trade.ResultOrder();
+                  errorMsg = "";
+               }
+               else
+               {
+                  errorMsg = trade.ResultRetcodeDescription();
+               }
+            }
+         }
       }
    }
    else if(action == "SELL" || (action == "SELL_LIMIT" && MathAbs(bid - entryPrice) <= (point * InpMaxSlippagePts)))
@@ -315,13 +390,38 @@ void ExecuteSignal(string signalId, string action, double entryPrice, double sl,
       else
       {
          errorMsg = trade.ResultRetcodeDescription();
+         // Retry with alternative filling modes if broker rejected fill mode
+         if(trade.ResultRetcode() == 10030 || trade.ResultRetcode() == TRADE_RETCODE_INVALID_FILL)
+         {
+            trade.SetTypeFilling(ORDER_FILLING_IOC);
+            if(trade.Sell(lots, g_symbol, bid, sl, finalTp, orderComment))
+            {
+               success = true;
+               ticket = trade.ResultOrder();
+               errorMsg = "";
+            }
+            else
+            {
+               trade.SetTypeFilling(ORDER_FILLING_RETURN);
+               if(trade.Sell(lots, g_symbol, bid, sl, finalTp, orderComment))
+               {
+                  success = true;
+                  ticket = trade.ResultOrder();
+                  errorMsg = "";
+               }
+               else
+               {
+                  errorMsg = trade.ResultRetcodeDescription();
+               }
+            }
+         }
       }
    }
    else if(action == "BUY_LIMIT")
    {
       if(entryPrice < ask)
       {
-         if(trade.BuyLimit(lots, entryPrice, g_symbol, sl, finalTp, ORDER_TIME_DAY, 0, orderComment))
+         if(trade.BuyLimit(lots, entryPrice, g_symbol, sl, finalTp, ORDER_TIME_GTC, 0, orderComment))
          {
             success = true;
             ticket = trade.ResultOrder();
@@ -348,7 +448,7 @@ void ExecuteSignal(string signalId, string action, double entryPrice, double sl,
    {
       if(entryPrice > bid)
       {
-         if(trade.SellLimit(lots, entryPrice, g_symbol, sl, finalTp, ORDER_TIME_DAY, 0, orderComment))
+         if(trade.SellLimit(lots, entryPrice, g_symbol, sl, finalTp, ORDER_TIME_GTC, 0, orderComment))
          {
             success = true;
             ticket = trade.ResultOrder();

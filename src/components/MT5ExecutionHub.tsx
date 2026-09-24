@@ -368,6 +368,88 @@ export const MT5ExecutionHub: React.FC<MT5ExecutionHubProps> = ({
         {/* TAB 1: Order Blotter & Signal Queue */}
         {activeTab === 'blotter' && (
           <div className="space-y-4">
+            {/* Connection Diagnostics Banner when disconnected and signals pending */}
+            {!terminalStatus.connected && signals.some((s) => s.status === 'PENDING') && (
+              <div className="p-4 rounded-xl bg-amber-950/40 border-2 border-amber-500/50 shadow-lg font-mono space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 animate-bounce" />
+                    <div>
+                      <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wide">
+                        Why Trades Are Not Executing: MT5 Terminal Is Not Connected
+                      </h4>
+                      <p className="text-[11px] text-amber-200/90 mt-0.5">
+                        {signals.filter((s) => s.status === 'PENDING').length} order(s) are queued in the cloud blotter waiting for your desktop MT5 client. Follow these 3 checks:
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('ea-code')}
+                    className="px-3 py-1 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shrink-0 transition-colors"
+                  >
+                    View Setup Guide
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1 text-[11px]">
+                  <div className="bg-slate-950/80 p-3 rounded-lg border border-amber-500/30">
+                    <div className="font-bold text-amber-400 mb-1 flex items-center gap-1.5">
+                      <span className="w-4 h-4 rounded-full bg-amber-400/20 text-amber-300 flex items-center justify-center text-[10px]">1</span>
+                      EA Server URL
+                    </div>
+                    <p className="text-slate-300 leading-snug">
+                      In MT5 EA inputs, verify <code className="text-amber-300">InpAppUrl</code> is set to this cloud app URL (not localhost):
+                    </p>
+                    <div className="mt-2 flex items-center justify-between gap-1 bg-slate-900 px-2 py-1 rounded border border-slate-800 text-[10px]">
+                      <span className="text-slate-300 truncate">{appOrigin}</span>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(appOrigin, setCopiedUrl)}
+                        className="text-amber-400 hover:text-amber-300 shrink-0"
+                        title="Copy URL"
+                      >
+                        {copiedUrl ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-950/80 p-3 rounded-lg border border-amber-500/30">
+                    <div className="font-bold text-amber-400 mb-1 flex items-center gap-1.5">
+                      <span className="w-4 h-4 rounded-full bg-amber-400/20 text-amber-300 flex items-center justify-center text-[10px]">2</span>
+                      MT5 WebRequest Whitelist
+                    </div>
+                    <p className="text-slate-300 leading-snug">
+                      In MT5 go to <b>Tools → Options → Expert Advisors</b>. Check <b>"Allow WebRequest for listed URL"</b> and paste:
+                    </p>
+                    <div className="mt-2 flex items-center justify-between gap-1 bg-slate-900 px-2 py-1 rounded border border-slate-800 text-[10px]">
+                      <span className="text-slate-300 truncate">{appOrigin}</span>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(appOrigin, setCopiedUrl)}
+                        className="text-amber-400 hover:text-amber-300 shrink-0"
+                        title="Copy URL"
+                      >
+                        {copiedUrl ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-950/80 p-3 rounded-lg border border-amber-500/30">
+                    <div className="font-bold text-amber-400 mb-1 flex items-center gap-1.5">
+                      <span className="w-4 h-4 rounded-full bg-amber-400/20 text-amber-300 flex items-center justify-center text-[10px]">3</span>
+                      Algo Trading & Chart
+                    </div>
+                    <p className="text-slate-300 leading-snug">
+                      1. Click <b>"Algo Trading"</b> button in MT5 toolbar (must be green).<br />
+                      2. In chart EA properties (F7), check <b>"Allow Algo Trading"</b>.<br />
+                      3. Check <b>Experts</b> tab at bottom of MT5 for live logs.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-between text-xs font-mono text-slate-400 border-b border-slate-800 pb-2">
               <span className="font-bold text-slate-200 flex items-center gap-2">
                 <Terminal className="w-4 h-4 text-amber-400" />

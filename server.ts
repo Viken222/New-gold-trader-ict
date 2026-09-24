@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
@@ -668,20 +669,44 @@ MANDATORY INSTRUCTIONS:
     return res.json({ success: true, signal: target });
   });
 
-  // 7. Download EA .mq5 File
-  app.get('/api/mt5/download/ea', (_req, res) => {
-    const filePath = path.join(process.cwd(), 'public', 'ICT_XAUUSD_Executor.mq5');
-    res.setHeader('Content-Disposition', 'attachment; filename="ICT_XAUUSD_Executor.mq5"');
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.sendFile(filePath);
+  // 7. Download EA .mq5 File (dynamically configured with real live URL)
+  app.get('/api/mt5/download/ea', (req, res) => {
+    try {
+      const filePath = path.join(process.cwd(), 'public', 'ICT_XAUUSD_Executor.mq5');
+      let fileContent = fs.readFileSync(filePath, 'utf-8');
+      
+      const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+      const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+      const currentUrl = `${proto}://${host}`;
+
+      fileContent = fileContent.replace('http://localhost:3000', currentUrl);
+
+      res.setHeader('Content-Disposition', 'attachment; filename="ICT_XAUUSD_Executor.mq5"');
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.send(fileContent);
+    } catch (err: any) {
+      return res.status(500).send('Error preparing EA download');
+    }
   });
 
-  // 8. Download Python Bridge Script
-  app.get('/api/mt5/download/python', (_req, res) => {
-    const filePath = path.join(process.cwd(), 'public', 'mt5_bridge_bot.py');
-    res.setHeader('Content-Disposition', 'attachment; filename="mt5_bridge_bot.py"');
-    res.setHeader('Content-Type', 'text/x-python; charset=utf-8');
-    return res.sendFile(filePath);
+  // 8. Download Python Bridge Script (dynamically configured with real live URL)
+  app.get('/api/mt5/download/python', (req, res) => {
+    try {
+      const filePath = path.join(process.cwd(), 'public', 'mt5_bridge_bot.py');
+      let fileContent = fs.readFileSync(filePath, 'utf-8');
+      
+      const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+      const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+      const currentUrl = `${proto}://${host}`;
+
+      fileContent = fileContent.replace('http://localhost:3000', currentUrl);
+
+      res.setHeader('Content-Disposition', 'attachment; filename="mt5_bridge_bot.py"');
+      res.setHeader('Content-Type', 'text/x-python; charset=utf-8');
+      return res.send(fileContent);
+    } catch (err: any) {
+      return res.status(500).send('Error preparing Python bot download');
+    }
   });
 
   // Vite Middleware in dev, static files in production

@@ -10,9 +10,9 @@
 #property description "Connects to ICT Web Application via REST WebRequest"
 #property strict
 
-#include <Trade\Trade.mqh>
-#include <Trade\PositionInfo.mqh>
-#include <Trade\OrderInfo.mqh>
+#include <Trade\\Trade.mqh>
+#include <Trade\\PositionInfo.mqh>
+#include <Trade\\OrderInfo.mqh>
 
 //--- Input Parameters
 input group "=== Institutional Server Settings ==="
@@ -46,8 +46,9 @@ datetime       g_lastPollTime = 0;
 datetime       g_lastHeartbeat = 0;
 string         g_executedSignals[];
 
-//--- Forward Function Prototypes (Ensures 0 compilation errors regardless of call order)
+//--- Forward Function Prototypes (Ensures 0 compilation errors in MetaEditor)
 string AutoDetectGoldSymbol();
+void   ConfigureTradeFilling(string symbol);
 void   SendHeartbeat();
 void   PollAndExecuteSignals();
 void   ParseAndExecuteJson(string json);
@@ -66,7 +67,6 @@ int OnInit()
 {
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints((ulong)InpMaxSlippagePts);
-   trade.SetTypeFilling(ORDER_FILLING_FOK);
 
    // Determine gold symbol on current broker
    if(StringLen(InpSymbolOverride) > 0)
@@ -77,6 +77,9 @@ int OnInit()
    {
       g_symbol = AutoDetectGoldSymbol();
    }
+
+   // Dynamically configure broker-supported filling mode (IOC / FOK / RETURN)
+   ConfigureTradeFilling(g_symbol);
 
    if(!SymbolSelect(g_symbol, true))
    {
@@ -136,11 +139,41 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
+//| Configure broker supported filling mode                          |
+//+------------------------------------------------------------------+
+void ConfigureTradeFilling(string symbol)
+{
+   uint filling = (uint)SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
+   if((filling & SYMBOL_FILLING_IOC) != 0)
+   {
+      trade.SetTypeFilling(ORDER_FILLING_IOC);
+   }
+   else if((filling & SYMBOL_FILLING_FOK) != 0)
+   {
+      trade.SetTypeFilling(ORDER_FILLING_FOK);
+   }
+   else
+   {
+      trade.SetTypeFilling(ORDER_FILLING_RETURN);
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Auto-detect broker gold symbol naming convention                 |
 //+------------------------------------------------------------------+
 string AutoDetectGoldSymbol()
 {
-   string candidates[] = {"XAUUSD", "GOLD", "XAUUSDm", "XAUUSD.m", "XAUUSD+", "XAUUSD_i", "XAUUSDb", "PAXGUSDT"};
+   // 1. If chart symbol is already a gold asset, use it directly
+   string currentSym = _Symbol;
+   string upperSym = currentSym;
+   StringToUpper(upperSym);
+   if(StringFind(upperSym, "XAU") >= 0 || StringFind(upperSym, "GOLD") >= 0)
+   {
+      return currentSym;
+   }
+
+   // 2. Scan broker symbols for Gold
+   string candidates[] = {"XAUUSD", "GOLD", "XAUUSDm", "XAUUSD.m", "XAUUSD+", "XAUUSD_i", "XAUUSDb", "XAUUSD.raw", "XAUUSD.ecn", "PAXGUSDT"};
    for(int i = 0; i < ArraySize(candidates); i++)
    {
       if(SymbolInfoDouble(candidates[i], SYMBOL_BID) > 0)
@@ -156,22 +189,36 @@ string AutoDetectGoldSymbol()
 //+------------------------------------------------------------------+
 void PollAndExecuteSignals()
 {
-   string url = InpAppUrl + "/api/mt5/signals?token=" + InpApiToken + "&symbol=" + g_symbol;
-   string headers = "User-Agent: MT5_ICT_Executor/3.0\r\nAccept: application/json\r\n";
+   string cleanUrl = InpAppUrl;
+   while(StringLen(cleanUrl) > 0 && StringSubstr(cleanUrl, StringLen(cleanUrl) - 1, 1) == "/")
+   {
+      cleanUrl = StringSubstr(cleanUrl, 0, StringLen(cleanUrl) - 1);
+   }
+
+   string url = cleanUrl + "/api/mt5/signals?token=" + InpApiToken + "&symbol=" + g_symbol;
+   string headers = "User-Agent: MT5_ICT_Executor/3.0\\r\\nAccept: application/json\\r\\n";
    char postData[];
    char resultData[];
    string resultHeaders;
 
    ResetLastError();
-   int res = WebRequest("GET", url, headers, 3000, postData, resultData, resultHeaders);
+   int res = WebRequest("GET", url, headers, 3500, postData, resultData, resultHeaders);
 
    if(res == -1)
    {
       int err = GetLastError();
       if(err == 4014) // ERR_FUNCTION_NOT_ALLOWED
       {
-         PrintFormat("[ICT MT5 BOT] WebRequest Error 4014: URL '%s' is not allowed.", InpAppUrl);
-         Print("[ICT MT5 BOT] Please open MT5 -> Tools -> Options -> Expert Advisors, check 'Allow WebRequest for listed URL' and add: ", InpAppUrl);
+         PrintFormat("[ICT MT5 BOT] WebRequest Error 4014: URL '%s' is NOT whitelisted in MT5!", cleanUrl);
+         Print("[ICT MT5 BOT] FIX: Open MT5 -> Tools -> Options -> Expert Advisors -> check 'Allow WebRequest for listed URL' and add: ", cleanUrl);
+      }
+      else if(err == 4006)
+      {
+         PrintFormat("[ICT MT5 BOT] WebRequest Error 4006 (Network Failed) connecting to '%s'. Verify internet connection and URL.", cleanUrl);
+      }
+      else
+      {
+         PrintFormat("[ICT MT5 BOT] WebRequest Error %d connecting to '%s'", err, cleanUrl);
       }
       return;
    }
@@ -180,7 +227,7 @@ void PollAndExecuteSignals()
    {
       if(InpPrintVerboseLog && res != 404)
       {
-         PrintFormat("[ICT MT5 BOT] Server responded with HTTP status %d", res);
+         PrintFormat("[ICT MT5 BOT] Server responded with HTTP status %d for %s", res, url);
       }
       return;
    }
@@ -198,11 +245,10 @@ void PollAndExecuteSignals()
 void ParseAndExecuteJson(string json)
 {
    // Check if "signals" array exists
-   int signalsPos = StringFind(json, "\"signals\":[");
+   int signalsPos = StringFind(json, "\\"signals\\":[");
    if(signalsPos < 0)
    {
-      // Fallback: check if single signal or empty array
-      if(StringFind(json, "\"signals\":[]") >= 0) return;
+      if(StringFind(json, "\\"signals\\":[]") >= 0) return;
       signalsPos = 0;
    }
 
@@ -210,10 +256,10 @@ void ParseAndExecuteJson(string json)
    int startPos = signalsPos;
    while(true)
    {
-      int idPos = StringFind(json, "\"id\":\"", startPos);
+      int idPos = StringFind(json, "\\"id\\":\\"", startPos);
       if(idPos < 0) break;
 
-      int idEnd = StringFind(json, "\"", idPos + 6);
+      int idEnd = StringFind(json, "\\"", idPos + 6);
       if(idEnd < 0) break;
       string signalId = StringSubstr(json, idPos + 6, idEnd - (idPos + 6));
 
@@ -287,10 +333,12 @@ void ExecuteSignal(string signalId, string action, double entryPrice, double sl,
    PrintFormat("[ICT MT5 BOT] >>> EXECUTING NEW SIGNAL: %s | Action: %s | Lots: %.2f | Price: %.2f | SL: %.2f | TP: %.2f",
                signalId, action, lots, entryPrice, sl, finalTp);
 
+   // Ensure broker filling mode is synchronized
+   ConfigureTradeFilling(g_symbol);
+
    // Execute Market or Pending Order based on action
    if(action == "BUY" || (action == "BUY_LIMIT" && MathAbs(ask - entryPrice) <= (point * InpMaxSlippagePts)))
    {
-      // Market Buy
       if(trade.Buy(lots, g_symbol, ask, sl, finalTp, orderComment))
       {
          success = true;
@@ -299,11 +347,35 @@ void ExecuteSignal(string signalId, string action, double entryPrice, double sl,
       else
       {
          errorMsg = trade.ResultRetcodeDescription();
+         // Retry with alternative filling modes if broker rejected fill mode
+         if(trade.ResultRetcode() == 10030 || trade.ResultRetcode() == TRADE_RETCODE_INVALID_FILL)
+         {
+            trade.SetTypeFilling(ORDER_FILLING_IOC);
+            if(trade.Buy(lots, g_symbol, ask, sl, finalTp, orderComment))
+            {
+               success = true;
+               ticket = trade.ResultOrder();
+               errorMsg = "";
+            }
+            else
+            {
+               trade.SetTypeFilling(ORDER_FILLING_RETURN);
+               if(trade.Buy(lots, g_symbol, ask, sl, finalTp, orderComment))
+               {
+                  success = true;
+                  ticket = trade.ResultOrder();
+                  errorMsg = "";
+               }
+               else
+               {
+                  errorMsg = trade.ResultRetcodeDescription();
+               }
+            }
+         }
       }
    }
    else if(action == "SELL" || (action == "SELL_LIMIT" && MathAbs(bid - entryPrice) <= (point * InpMaxSlippagePts)))
    {
-      // Market Sell
       if(trade.Sell(lots, g_symbol, bid, sl, finalTp, orderComment))
       {
          success = true;
@@ -312,14 +384,38 @@ void ExecuteSignal(string signalId, string action, double entryPrice, double sl,
       else
       {
          errorMsg = trade.ResultRetcodeDescription();
+         // Retry with alternative filling modes if broker rejected fill mode
+         if(trade.ResultRetcode() == 10030 || trade.ResultRetcode() == TRADE_RETCODE_INVALID_FILL)
+         {
+            trade.SetTypeFilling(ORDER_FILLING_IOC);
+            if(trade.Sell(lots, g_symbol, bid, sl, finalTp, orderComment))
+            {
+               success = true;
+               ticket = trade.ResultOrder();
+               errorMsg = "";
+            }
+            else
+            {
+               trade.SetTypeFilling(ORDER_FILLING_RETURN);
+               if(trade.Sell(lots, g_symbol, bid, sl, finalTp, orderComment))
+               {
+                  success = true;
+                  ticket = trade.ResultOrder();
+                  errorMsg = "";
+               }
+               else
+               {
+                  errorMsg = trade.ResultRetcodeDescription();
+               }
+            }
+         }
       }
    }
    else if(action == "BUY_LIMIT")
    {
-      // Limit Buy Order
       if(entryPrice < ask)
       {
-         if(trade.BuyLimit(lots, entryPrice, g_symbol, sl, finalTp, ORDER_TIME_DAY, 0, orderComment))
+         if(trade.BuyLimit(lots, entryPrice, g_symbol, sl, finalTp, ORDER_TIME_GTC, 0, orderComment))
          {
             success = true;
             ticket = trade.ResultOrder();
@@ -331,7 +427,6 @@ void ExecuteSignal(string signalId, string action, double entryPrice, double sl,
       }
       else
       {
-         // Price already passed limit, execute at market
          if(trade.Buy(lots, g_symbol, ask, sl, finalTp, orderComment))
          {
             success = true;
@@ -345,10 +440,9 @@ void ExecuteSignal(string signalId, string action, double entryPrice, double sl,
    }
    else if(action == "SELL_LIMIT")
    {
-      // Limit Sell Order
       if(entryPrice > bid)
       {
-         if(trade.SellLimit(lots, entryPrice, g_symbol, sl, finalTp, ORDER_TIME_DAY, 0, orderComment))
+         if(trade.SellLimit(lots, entryPrice, g_symbol, sl, finalTp, ORDER_TIME_GTC, 0, orderComment))
          {
             success = true;
             ticket = trade.ResultOrder();
@@ -360,7 +454,6 @@ void ExecuteSignal(string signalId, string action, double entryPrice, double sl,
       }
       else
       {
-         // Price already passed limit, execute at market
          if(trade.Sell(lots, g_symbol, bid, sl, finalTp, orderComment))
          {
             success = true;
@@ -420,7 +513,6 @@ void ManageOpenPositions()
          if(position.PositionType() == POSITION_TYPE_BUY)
          {
             double bePrice = NormalizeDouble(openPrice + (InpBeBufferPts * point), digits);
-            // If profit is at least 150 points ($1.50) and SL is still below BE
             if((currentPrice - openPrice) >= (150 * point) && (currentSl < openPrice || currentSl == 0))
             {
                trade.PositionModify(ticket, bePrice, currentTp);
@@ -443,8 +535,6 @@ void ManageOpenPositions()
       {
          MqlDateTime dt;
          TimeToStruct(TimeCurrent(), dt);
-         // Check if server time aligns with NY lunch window (11:30 NY)
-         // We close position to avoid the 11:30-13:30 NY chop regime
          if(dt.hour == InpNyLunchHour && dt.min >= InpNyLunchMin && dt.min <= (InpNyLunchMin + 15))
          {
             trade.PositionClose(ticket);
@@ -460,10 +550,10 @@ void ManageOpenPositions()
 void SendExecutionFeedback(string signalId, ulong ticket, string status, double executedPrice, string errorMsg)
 {
    string url = InpAppUrl + "/api/mt5/feedback";
-   string headers = "Content-Type: application/json\r\nUser-Agent: MT5_ICT_Executor/3.0\r\n";
+   string headers = "Content-Type: application/json\\r\\nUser-Agent: MT5_ICT_Executor/3.0\\r\\n";
 
    string payload = StringFormat(
-      "{\"token\":\"%s\",\"signalId\":\"%s\",\"ticketId\":%I64u,\"status\":\"%s\",\"executedPrice\":%.2f,\"errorMessage\":\"%s\",\"accountNumber\":\"%I64u\",\"broker\":\"%s\",\"equity\":%.2f,\"balance\":%.2f}",
+      "{\\"token\\":\\"%s\\",\\"signalId\\":\\"%s\\",\\"ticketId\\":%I64u,\\"status\\":\\"%s\\",\\"executedPrice\\":%.2f,\\"errorMessage\\":\\"%s\\",\\"accountNumber\\":\\"%I64u\\",\\"broker\\":\\"%s\\",\\"equity\\":%.2f,\\"balance\\":%.2f}",
       InpApiToken, signalId, ticket, status, executedPrice, errorMsg,
       AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_COMPANY),
       AccountInfoDouble(ACCOUNT_EQUITY), AccountInfoDouble(ACCOUNT_BALANCE)
@@ -483,10 +573,10 @@ void SendExecutionFeedback(string signalId, ulong ticket, string status, double 
 void SendHeartbeat()
 {
    string url = InpAppUrl + "/api/mt5/heartbeat";
-   string headers = "Content-Type: application/json\r\nUser-Agent: MT5_ICT_Executor/3.0\r\n";
+   string headers = "Content-Type: application/json\\r\\nUser-Agent: MT5_ICT_Executor/3.0\\r\\n";
 
    string payload = StringFormat(
-      "{\"token\":\"%s\",\"terminalType\":\"MQL5_EA\",\"symbol\":\"%s\",\"accountNumber\":\"%I64u\",\"broker\":\"%s\",\"equity\":%.2f,\"balance\":%.2f,\"currency\":\"%s\",\"serverTime\":\"%s\"}",
+      "{\\"token\\":\\"%s\\",\\"terminalType\\":\\"MQL5_EA\\",\\"symbol\\":\\"%s\\",\\"accountNumber\\":\\"%I64u\\",\\"broker\\":\\"%s\\",\\"equity\\":%.2f,\\"balance\\":%.2f,\\"currency\\":\\"%s\\",\\"serverTime\\":\\"%s\\"}",
       InpApiToken, g_symbol,
       AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_COMPANY),
       AccountInfoDouble(ACCOUNT_EQUITY), AccountInfoDouble(ACCOUNT_BALANCE),
@@ -526,12 +616,12 @@ double NormalizeLots(double lots)
 //+------------------------------------------------------------------+
 string ExtractJsonString(string json, string key, int startIdx = 0)
 {
-   string searchKey = "\"" + key + "\":\"";
+   string searchKey = "\\"" + key + "\\":\\"";
    int pos = StringFind(json, searchKey, startIdx);
    if(pos < 0) return "";
 
    int valStart = pos + StringLen(searchKey);
-   int valEnd = StringFind(json, "\"", valStart);
+   int valEnd = StringFind(json, "\\"", valStart);
    if(valEnd < 0) return "";
 
    return StringSubstr(json, valStart, valEnd - valStart);
@@ -542,13 +632,12 @@ string ExtractJsonString(string json, string key, int startIdx = 0)
 //+------------------------------------------------------------------+
 double ExtractJsonNumber(string json, string key, int startIdx = 0)
 {
-   string searchKey = "\"" + key + "\":";
+   string searchKey = "\\"" + key + "\\":";
    int pos = StringFind(json, searchKey, startIdx);
    if(pos < 0) return 0.0;
 
    int valStart = pos + StringLen(searchKey);
-   // Skip spaces or quotes
-   while(valStart < StringLen(json) && (StringGetCharacter(json, valStart) == ' ' || StringGetCharacter(json, valStart) == '\"'))
+   while(valStart < StringLen(json) && (StringGetCharacter(json, valStart) == ' ' || StringGetCharacter(json, valStart) == '\\"'))
    {
       valStart++;
    }
