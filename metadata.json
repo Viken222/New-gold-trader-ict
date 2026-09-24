@@ -1,0 +1,6 @@
+{
+  "name": "ICT XAUUSD Algorithmic Analyst",
+  "description": "ICT 2024 Mentorship Multi-Timeframe Chart Analysis Assistant specialized in spot gold (XAUUSD) for the New York AM session.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
