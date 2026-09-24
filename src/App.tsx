@@ -16,6 +16,7 @@ import { AnalysisTerminal } from './components/AnalysisTerminal';
 import { TradingViewWidget, LiveQuote } from './components/TradingViewWidget';
 import { DealingRangeQuadrantEngine } from './components/DealingRangeQuadrantEngine';
 import { MultiDayAsianLiquiditySweepTracker } from './components/MultiDayAsianLiquiditySweepTracker';
+import { MT5ExecutionHub } from './components/MT5ExecutionHub';
 import { History, ShieldAlert, Sparkles, AlertCircle, Info, Zap, UploadCloud } from 'lucide-react';
 import { extractPricesFromDataUrl } from './utils/chartPriceExtractor';
 import { getAccurateLiveSession } from './utils/sessionTiming';
@@ -44,6 +45,24 @@ export default function App() {
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
   const [history, setHistory] = useState<AnalysisResult[]>([]);
   const [liveQuote, setLiveQuote] = useState<LiveQuote | null>(null);
+  const [isMt5Connected, setIsMt5Connected] = useState<boolean>(false);
+
+  // Poll MT5 connection status
+  useEffect(() => {
+    const checkMt5 = () => {
+      fetch('/api/mt5/status')
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.success && d.terminalStatus) {
+            setIsMt5Connected(d.terminalStatus.connected);
+          }
+        })
+        .catch(() => {});
+    };
+    checkMt5();
+    const interval = setInterval(checkMt5, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Fetch initial live quote on mount
   useEffect(() => {
@@ -342,6 +361,10 @@ export default function App() {
         hasBaselineCharts={hasBaseline}
         onLoadPreset={loadPreset}
         onReset={handleReset}
+        isMt5Connected={isMt5Connected}
+        onToggleMt5={() => {
+          document.getElementById('mt5-execution-hub')?.scrollIntoView({ behavior: 'smooth' });
+        }}
       />
 
       {/* Main Workspace Body */}
@@ -525,10 +548,27 @@ export default function App() {
           canExecute={intakeSource === 'tradingview' || charts.length > 0}
         />
 
-        {/* 3. Institutional Output Terminal */}
+        {/* 4. MT5 Institutional Execution Bridge & Bot */}
+        <div id="mt5-execution-hub" className="pt-4 scroll-mt-20">
+          <MT5ExecutionHub
+            currentAnalysis={analysisResult}
+            currentPrice={
+              Number(sessionContext.calibratedPrices?.currentPrice) ||
+              liveQuote?.price ||
+              4285.50
+            }
+          />
+        </div>
+
+        {/* 5. Institutional Output Terminal */}
         {analysisResult && (
           <div id="analysis-results" className="pt-2">
-            <AnalysisTerminal result={analysisResult} />
+            <AnalysisTerminal
+              result={analysisResult}
+              onOpenMt5Hub={() => {
+                document.getElementById('mt5-execution-hub')?.scrollIntoView({ behavior: 'smooth' });
+              }}
+            />
           </div>
         )}
       </main>

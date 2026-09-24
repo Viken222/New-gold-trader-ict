@@ -19,6 +19,7 @@ import {
   ArrowDownRight,
   RefreshCw,
   Sliders,
+  Zap,
 } from 'lucide-react';
 import { LiveSessionInfo, getAccurateLiveSession } from '../utils/sessionTiming';
 
@@ -58,9 +59,50 @@ export const MultiDayAsianLiquiditySweepTracker: React.FC<MultiDayAsianLiquidity
   // Automation Rules Dialog State
   const [showRulesModal, setShowRulesModal] = useState<boolean>(false);
   const [copiedRules, setCopiedRules] = useState<boolean>(false);
+  const [isSendingMt5, setIsSendingMt5] = useState<boolean>(false);
+  const [mt5PushMsg, setMt5PushMsg] = useState<string | null>(null);
 
-  const containerRef = useRef<HTMLDivElement>(null);
   const curPrice = currentPrice > 0 ? currentPrice : 4285.50;
+
+  const handlePushSweepToMt5 = async () => {
+    setIsSendingMt5(true);
+    setMt5PushMsg(null);
+    try {
+      const today = multiDaySessions[0];
+      const isBullish = strategyMode === 'SWEEP_REVERSAL' ? today.lowSwept : today.highSwept;
+      const action = isBullish ? 'BUY_LIMIT' : 'SELL_LIMIT';
+      const entry = isBullish ? Number((curPrice - 0.50).toFixed(2)) : Number((curPrice + 0.50).toFixed(2));
+      const sl = isBullish ? Number((today.low - 2.0).toFixed(2)) : Number((today.high + 2.0).toFixed(2));
+      const tp1 = Number(today.midpoint.toFixed(2));
+      const tp2 = isBullish ? Number((today.high + 4.0).toFixed(2)) : Number((today.low - 4.0).toFixed(2));
+
+      const res = await fetch('/api/mt5/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: symbol.replace(/^OANDA:|^FOREXCOM:/, ''),
+          action,
+          entryPrice: entry,
+          stopLoss: sl,
+          takeProfit1: tp1,
+          takeProfit2: tp2,
+          lots: 0.15,
+          comment: `ICT:Marek_${strategyMode === 'SWEEP_REVERSAL' ? 'Rev' : 'Cont'}`,
+          source: `Marek Majer Asian Sweep (${strategyMode})`,
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setMt5PushMsg('Dispatched to MT5!');
+        setTimeout(() => setMt5PushMsg(null), 3000);
+      }
+    } catch {
+      setMt5PushMsg('Failed to push');
+      setTimeout(() => setMt5PushMsg(null), 3000);
+    } finally {
+      setIsSendingMt5(false);
+    }
+  };
 
   // Derive Multi-Day Asian Session Boxes (Marek Majeer model) anchored dynamically to current gold price
   const multiDaySessions = useMemo<AsianSessionBox[]>(() => {
@@ -260,28 +302,11 @@ export const MultiDayAsianLiquiditySweepTracker: React.FC<MultiDayAsianLiquidity
     }
   }, [strategyMode, multiDaySessions, curPrice]);
 
-  // Embed TradingView Advanced Charts Widget
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    // Clean previous widget
-    containerRef.current.innerHTML = '';
-
-    const widgetContainer = document.createElement('div');
-    widgetContainer.className = 'tradingview-widget-container__widget';
-    widgetContainer.style.height = '100%';
-    widgetContainer.style.width = '100%';
-    containerRef.current.appendChild(widgetContainer);
-
-    const script = document.createElement('script');
-    script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-    script.type = 'text/javascript';
-    script.async = true;
-
-    // TradingView Advanced Chart configuration with Asian session overlay specifications
-    script.innerHTML = JSON.stringify({
+  // TradingView Advanced Chart configuration with Asian session overlay specifications
+  const tvIframeSrc = useMemo(() => {
+    const config = {
       autosize: true,
-      symbol: symbol,
+      symbol,
       interval: chartInterval,
       timezone: 'Etc/UTC',
       theme: 'dark',
@@ -298,15 +323,8 @@ export const MultiDayAsianLiquiditySweepTracker: React.FC<MultiDayAsianLiquidity
         'RSI@tv-basicstudies',
       ],
       support_host: 'https://www.tradingview.com',
-    });
-
-    containerRef.current.appendChild(script);
-
-    return () => {
-      if (containerRef.current) {
-        containerRef.current.innerHTML = '';
-      }
     };
+    return `https://www.tradingview-widget.com/embed-widget/advanced-chart/?locale=en#${encodeURIComponent(JSON.stringify(config))}`;
   }, [symbol, chartInterval]);
 
   // Format Automation Rules text for export
@@ -560,6 +578,19 @@ Dotted_Cyan_Projections:
               <p className="text-xs font-mono text-slate-300 mt-2 leading-relaxed">
                 {operationalPhase.description}
               </p>
+
+              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-mono text-slate-500">Marek Majer Model</span>
+                <button
+                  type="button"
+                  disabled={isSendingMt5}
+                  onClick={handlePushSweepToMt5}
+                  className="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-xs flex items-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer disabled:opacity-50"
+                >
+                  <Zap className="w-3.5 h-3.5 fill-slate-950" />
+                  <span>{isSendingMt5 ? 'Sending...' : mt5PushMsg || 'Send Asian Setup to MT5'}</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -646,7 +677,13 @@ Dotted_Cyan_Projections:
 
           {/* Embedded TradingView Chart Container */}
           <div className="relative flex-1 min-h-[440px] w-full bg-slate-950">
-            <div ref={containerRef} className="w-full h-full min-h-[440px]" />
+            <iframe
+              key={`asian-chart-${symbol}-${chartInterval}`}
+              src={tvIframeSrc}
+              className="w-full h-full min-h-[440px] border-none"
+              title="TradingView Asian Liquidity Sweep Tracker"
+              loading="lazy"
+            />
 
             {/* Floating Overlay HUD of Active Projected Asian Reference Extensions */}
             <div className="absolute bottom-3 left-3 bg-slate-950/90 border border-slate-800 rounded-lg p-2.5 shadow-xl backdrop-blur-sm pointer-events-none text-xs font-mono">

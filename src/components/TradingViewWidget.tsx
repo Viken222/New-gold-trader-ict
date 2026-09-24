@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Sparkles,
   RefreshCw,
@@ -48,7 +48,6 @@ export const TradingViewWidget: React.FC<TradingViewWidgetProps> = ({
   onLiveQuoteUpdated,
   onViewChartModal,
 }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
   const [symbol, setSymbol] = useState<string>('OANDA:XAUUSD');
   const [interval, setInterval] = useState<string>('15'); // 15M default for Dealing Range
   const [autoScanEnabled, setAutoScanEnabled] = useState<boolean>(false);
@@ -143,54 +142,27 @@ export const TradingViewWidget: React.FC<TradingViewWidgetProps> = ({
     return () => clearInterval(timer);
   }, [autoScanEnabled, isAnalyzing, onRunLiveAnalysis]);
 
-  // Embed TradingView script widget
-  useEffect(() => {
-    const containerId = 'tradingview_xauusd_chart_embed';
-    if (!containerRef.current) return;
-
-    // Clear previous
-    containerRef.current.innerHTML = `
-      <div id="${containerId}" style="height: 100%; width: 100%;"></div>
-    `;
-
-    // Load tv.js script if not present
-    const scriptId = 'tradingview-widget-script';
-    let script = document.getElementById(scriptId) as HTMLScriptElement;
-
-    const initWidget = () => {
-      if ((window as any).TradingView) {
-        new (window as any).TradingView.widget({
-          autosize: true,
-          symbol,
-          interval,
-          timezone: 'America/New_York',
-          theme: 'dark',
-          style: '1',
-          locale: 'en',
-          toolbar_bg: '#090d16',
-          enable_publishing: false,
-          allow_symbol_change: true,
-          container_id: containerId,
-          hide_side_toolbar: false,
-          withdateranges: true,
-          save_image: false,
-          studies: [
-            // Clean view for institutional price action
-          ],
-        });
-      }
+  // Isolated TradingView Chart configuration
+  const tvIframeSrc = useMemo(() => {
+    const config = {
+      autosize: true,
+      symbol,
+      interval,
+      timezone: 'America/New_York',
+      theme: 'dark',
+      style: '1',
+      locale: 'en',
+      toolbar_bg: '#090d16',
+      enable_publishing: false,
+      allow_symbol_change: true,
+      hide_side_toolbar: false,
+      withdateranges: true,
+      save_image: false,
+      backgroundColor: 'rgba(9, 13, 22, 1)',
+      gridColor: 'rgba(30, 41, 59, 0.4)',
+      support_host: 'https://www.tradingview.com',
     };
-
-    if (!script) {
-      script = document.createElement('script');
-      script.id = scriptId;
-      script.src = 'https://s3.tradingview.com/tv.js';
-      script.async = true;
-      script.onload = initWidget;
-      document.head.appendChild(script);
-    } else {
-      initWidget();
-    }
+    return `https://www.tradingview-widget.com/embed-widget/advanced-chart/?locale=en#${encodeURIComponent(JSON.stringify(config))}`;
   }, [symbol, interval]);
 
   // Determine current quadrant
@@ -420,7 +392,13 @@ export const TradingViewWidget: React.FC<TradingViewWidgetProps> = ({
       {/* Main Content Area: TradingView Chart OR Extracted Multi-Timeframe Snapshots */}
       {viewTab === 'chart' ? (
         <div className="relative w-full h-[540px] bg-slate-950">
-          <div ref={containerRef} className="w-full h-full" />
+          <iframe
+            key={`tv-main-${symbol}-${interval}`}
+            src={tvIframeSrc}
+            className="w-full h-full border-none"
+            title="TradingView Real-Time Chart"
+            loading="lazy"
+          />
         </div>
       ) : (
         <div className="p-4 bg-slate-950">

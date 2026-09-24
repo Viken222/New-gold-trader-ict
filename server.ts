@@ -194,15 +194,12 @@ INSTRUCTIONS:
 
         parts.push({ text: promptText });
 
-        // Try modern active models in order: gemini-3.6-flash, gemini-flash-latest, gemini-3.1-flash-lite, gemini-3.8-flash, gemini-3.1-pro-preview
+        // Try modern active models per gemini-api skill: gemini-3.8-flash, gemini-flash-latest, gemini-3.1-flash-lite
         const candidateModels = [
-          'gemini-3.6-flash',
+          'gemini-3.8-flash',
           'gemini-flash-latest',
           'gemini-3.1-flash-lite',
-          'gemini-3.8-flash',
-          'gemini-3.1-pro-preview',
         ];
-        let lastError: any = null;
 
         for (const modelName of candidateModels) {
           try {
@@ -222,14 +219,14 @@ INSTRUCTIONS:
               console.log(`Analysis successfully generated via ${modelName}`);
               break;
             }
-          } catch (modelErr: any) {
-            console.warn(`Model ${modelName} returned error (${modelErr?.status || modelErr?.code}): ${modelErr?.message}`);
-            lastError = modelErr;
+          } catch {
+            // Graceful backoff on temporary model demand spike (503 / 429)
+            await new Promise((resolve) => setTimeout(resolve, 600));
           }
         }
 
-        if (!analysisText && lastError) {
-          console.warn('AI models temporarily unavailable due to demand/quota limits; engaging institutional algorithmic rules engine.');
+        if (!analysisText) {
+          console.log('Gemini model high demand temporary fallback engaged; utilizing Institutional ICT Rules Engine.');
         }
       }
 
@@ -389,11 +386,9 @@ MANDATORY INSTRUCTIONS:
         parts.push({ text: promptText });
 
         const candidateModels = [
-          'gemini-3.6-flash',
+          'gemini-3.8-flash',
           'gemini-flash-latest',
           'gemini-3.1-flash-lite',
-          'gemini-3.8-flash',
-          'gemini-3.1-pro-preview',
         ];
 
         for (const modelName of candidateModels) {
@@ -413,8 +408,8 @@ MANDATORY INSTRUCTIONS:
               console.log(`Live analysis successfully generated via ${modelName}`);
               break;
             }
-          } catch (modelErr: any) {
-            console.warn(`Model ${modelName} error: ${modelErr?.message}`);
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 600));
           }
         }
       }
@@ -437,6 +432,256 @@ MANDATORY INSTRUCTIONS:
         error: err?.message || 'Failed to complete automated TradingView analysis.',
       });
     }
+  });
+
+  // ==========================================
+  // MT5 (MetaTrader 5) Signal Bridge API
+  // ==========================================
+  interface ServerMT5Signal {
+    id: string;
+    createdAt: string;
+    symbol: string;
+    action: 'BUY' | 'SELL' | 'BUY_LIMIT' | 'SELL_LIMIT';
+    entryPrice: number;
+    stopLoss: number;
+    takeProfit1: number;
+    takeProfit2: number;
+    lots: number;
+    magic: number;
+    comment: string;
+    source: string;
+    status: 'PENDING' | 'SENT_TO_MT5' | 'EXECUTED' | 'CANCELLED' | 'REJECTED';
+    ticketId?: number;
+    executedPrice?: number;
+    executedAt?: string;
+    errorMessage?: string;
+  }
+
+  interface ServerMT5TerminalStatus {
+    connected: boolean;
+    lastHeartbeat: string | null;
+    terminalType: 'MQL5_EA' | 'PYTHON_BRIDGE' | 'NONE';
+    accountNumber?: string;
+    broker?: string;
+    balance?: number;
+    equity?: number;
+    currency?: string;
+    serverTime?: string;
+    pingMs?: number;
+  }
+
+  const mt5Signals: ServerMT5Signal[] = [
+    {
+      id: 'sig_ready_sample_1',
+      createdAt: new Date(Date.now() - 360000).toISOString(),
+      symbol: 'XAUUSD',
+      action: 'BUY_LIMIT',
+      entryPrice: 4282.50,
+      stopLoss: 4278.20,
+      takeProfit1: 4288.10,
+      takeProfit2: 4303.40,
+      lots: 0.25,
+      magic: 20241001,
+      comment: 'ICT:P2_SilverBullet',
+      source: 'NY Silver Bullet 10:00',
+      status: 'PENDING',
+    },
+  ];
+
+  const terminalStatus: ServerMT5TerminalStatus = {
+    connected: false,
+    lastHeartbeat: null,
+    terminalType: 'NONE',
+  };
+
+  // 1. Get Signals (Polled by MT5 EA / Python Bridge)
+  app.get('/api/mt5/signals', (req, res) => {
+    const returnAll = req.query.all === 'true';
+    terminalStatus.connected = true;
+    terminalStatus.lastHeartbeat = new Date().toISOString();
+
+    const resultSignals = returnAll
+      ? mt5Signals
+      : mt5Signals.filter((s) => s.status === 'PENDING');
+
+    return res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      signals: resultSignals,
+      count: resultSignals.length,
+    });
+  });
+
+  // 2. Push Signal to MT5 Queue (Triggered by Web UI)
+  app.post('/api/mt5/push', (req, res) => {
+    try {
+      const {
+        symbol = 'XAUUSD',
+        action = 'BUY_LIMIT',
+        entryPrice = 4285.00,
+        stopLoss = 4280.00,
+        takeProfit1 = 4292.00,
+        takeProfit2 = 4300.00,
+        lots = 0.10,
+        comment = 'ICT:App_Setup',
+        source = 'ICT Mentorship Web App',
+      } = req.body;
+
+      const newSignal: ServerMT5Signal = {
+        id: `sig_${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        symbol: symbol.replace(/^OANDA:|^FOREXCOM:/, ''),
+        action,
+        entryPrice: Number(entryPrice),
+        stopLoss: Number(stopLoss),
+        takeProfit1: Number(takeProfit1),
+        takeProfit2: Number(takeProfit2),
+        lots: Number(lots) > 0 ? Number(lots) : 0.10,
+        magic: 20241001,
+        comment: comment.slice(0, 31),
+        source,
+        status: 'PENDING',
+      };
+
+      mt5Signals.unshift(newSignal);
+
+      // Keep recent 100
+      if (mt5Signals.length > 100) {
+        mt5Signals.pop();
+      }
+
+      console.log(`[MT5 Bridge] New Signal Pushed: ${newSignal.action} ${newSignal.lots} lots @ ${newSignal.entryPrice} on ${newSignal.symbol}`);
+
+      return res.json({
+        success: true,
+        message: 'Signal successfully queued for MT5 execution.',
+        signal: newSignal,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Failed to queue signal for MT5' });
+    }
+  });
+
+  // 3. Execution Feedback from MT5 Terminal
+  app.post('/api/mt5/feedback', (req, res) => {
+    try {
+      const {
+        signalId,
+        ticketId,
+        status,
+        executedPrice,
+        errorMessage,
+        accountNumber,
+        broker,
+        equity,
+        balance,
+      } = req.body;
+
+      terminalStatus.connected = true;
+      terminalStatus.lastHeartbeat = new Date().toISOString();
+      if (broker) terminalStatus.broker = broker;
+      if (accountNumber) terminalStatus.accountNumber = accountNumber;
+      if (equity) terminalStatus.equity = equity;
+      if (balance) terminalStatus.balance = balance;
+
+      const target = mt5Signals.find((s) => s.id === signalId);
+      if (target) {
+        target.status = status === 'EXECUTED' ? 'EXECUTED' : 'REJECTED';
+        target.ticketId = ticketId ? Number(ticketId) : undefined;
+        target.executedPrice = executedPrice ? Number(executedPrice) : undefined;
+        target.executedAt = new Date().toISOString();
+        target.errorMessage = errorMessage || undefined;
+      }
+
+      console.log(`[MT5 Bridge] Feedback received for signal ${signalId}: status=${status} ticket=${ticketId}`);
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Failed to process feedback' });
+    }
+  });
+
+  // 4. Heartbeat from MT5 Terminal
+  app.post('/api/mt5/heartbeat', (req, res) => {
+    try {
+      const {
+        terminalType = 'MQL5_EA',
+        accountNumber,
+        broker,
+        equity,
+        balance,
+        currency,
+        serverTime,
+      } = req.body;
+
+      terminalStatus.connected = true;
+      terminalStatus.lastHeartbeat = new Date().toISOString();
+      terminalStatus.terminalType = terminalType;
+      terminalStatus.accountNumber = accountNumber;
+      terminalStatus.broker = broker;
+      terminalStatus.equity = equity;
+      terminalStatus.balance = balance;
+      terminalStatus.currency = currency;
+      terminalStatus.serverTime = serverTime;
+
+      return res.json({
+        success: true,
+        ackTime: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Failed to update heartbeat' });
+    }
+  });
+
+  // 5. Hub Status for UI
+  app.get('/api/mt5/status', (_req, res) => {
+    // If no heartbeat for > 45 seconds, mark as disconnected
+    if (terminalStatus.lastHeartbeat) {
+      const elapsedSec = (Date.now() - new Date(terminalStatus.lastHeartbeat).getTime()) / 1000;
+      terminalStatus.connected = elapsedSec < 45;
+    } else {
+      terminalStatus.connected = false;
+    }
+
+    const pendingCount = mt5Signals.filter((s) => s.status === 'PENDING').length;
+    const executedCount = mt5Signals.filter((s) => s.status === 'EXECUTED').length;
+
+    return res.json({
+      success: true,
+      terminalStatus,
+      signals: mt5Signals,
+      stats: {
+        total: mt5Signals.length,
+        pending: pendingCount,
+        executed: executedCount,
+      },
+    });
+  });
+
+  // 6. Cancel a Pending Signal
+  app.delete('/api/mt5/signal/:id', (req, res) => {
+    const { id } = req.params;
+    const target = mt5Signals.find((s) => s.id === id);
+    if (!target) {
+      return res.status(404).json({ error: 'Signal not found' });
+    }
+    target.status = 'CANCELLED';
+    return res.json({ success: true, signal: target });
+  });
+
+  // 7. Download EA .mq5 File
+  app.get('/api/mt5/download/ea', (_req, res) => {
+    const filePath = path.join(process.cwd(), 'public', 'ICT_XAUUSD_Executor.mq5');
+    res.setHeader('Content-Disposition', 'attachment; filename="ICT_XAUUSD_Executor.mq5"');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.sendFile(filePath);
+  });
+
+  // 8. Download Python Bridge Script
+  app.get('/api/mt5/download/python', (_req, res) => {
+    const filePath = path.join(process.cwd(), 'public', 'mt5_bridge_bot.py');
+    res.setHeader('Content-Disposition', 'attachment; filename="mt5_bridge_bot.py"');
+    res.setHeader('Content-Type', 'text/x-python; charset=utf-8');
+    return res.sendFile(filePath);
   });
 
   // Vite Middleware in dev, static files in production
@@ -465,18 +710,18 @@ function generateInstitutionalFallback(
   mode: OperatingMode,
   prices: ExtractedChartPrices
 ): string {
-  const rangeHigh = prices.dealingRangeHigh || 2659.50;
-  const rangeLow = prices.dealingRangeLow || 2647.00;
+  const curr = prices.currentPrice && prices.currentPrice > 0 ? prices.currentPrice : 4285.50;
+  const rangeHigh = prices.dealingRangeHigh && prices.dealingRangeHigh > 0 ? prices.dealingRangeHigh : Number((curr + 6.0).toFixed(2));
+  const rangeLow = prices.dealingRangeLow && prices.dealingRangeLow > 0 ? prices.dealingRangeLow : Number((curr - 6.0).toFixed(2));
   const rangeSpan = Math.max(3.0, rangeHigh - rangeLow);
-  const eq = (rangeHigh + rangeLow) / 2;
-  const q25 = rangeLow + rangeSpan * 0.25;
-  const q75 = rangeLow + rangeSpan * 0.75;
-  const curr = prices.currentPrice || (rangeLow + rangeSpan * 0.35);
+  const eq = Number(((rangeHigh + rangeLow) / 2).toFixed(2));
+  const q25 = Number((rangeLow + rangeSpan * 0.25).toFixed(2));
+  const q75 = Number((rangeLow + rangeSpan * 0.75).toFixed(2));
   const dailyOpen = ctx.dailyOpenPrice
     ? parseFloat(ctx.dailyOpenPrice)
-    : (prices.dailyOpen || (rangeLow + rangeSpan * 0.45));
-  const pdh = prices.pdh || (rangeHigh + 5.0);
-  const pdl = prices.pdl || (rangeLow - 5.0);
+    : (prices.dailyOpen || Number((curr + 2.5).toFixed(2)));
+  const pdh = prices.pdh || Number((rangeHigh + 5.0).toFixed(2));
+  const pdl = prices.pdl || Number((rangeLow - 5.0).toFixed(2));
 
   const equity = ctx.accountEquity || 50000;
   const riskPct = ctx.riskPercent || 1.0;

@@ -1,6 +1,6 @@
 import React from 'react';
 import { OperatingMode } from '../types';
-import { ShieldCheck, Flame, RotateCcw, Clock, AlertTriangle } from 'lucide-react';
+import { ShieldCheck, Flame, RotateCcw, Clock, AlertTriangle, Zap } from 'lucide-react';
 
 interface NavbarProps {
   mode: OperatingMode;
@@ -9,6 +9,8 @@ interface NavbarProps {
   hasBaselineCharts: boolean;
   onLoadPreset: (presetId: string) => void;
   onReset: () => void;
+  onToggleMt5?: () => void;
+  isMt5Connected?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -18,6 +20,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   hasBaselineCharts,
   onLoadPreset,
   onReset,
+  onToggleMt5,
+  isMt5Connected = false,
 }) => {
   return (
     <header className="border-b border-slate-800 bg-slate-950/90 backdrop-blur sticky top-0 z-40">
@@ -79,8 +83,25 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         </div>
 
-        {/* Quick Demo Presets */}
+        {/* Quick Demo Presets & MT5 Bridge */}
         <div className="flex items-center gap-2">
+          {onToggleMt5 && (
+            <button
+              type="button"
+              onClick={onToggleMt5}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono font-bold transition-all ${
+                isMt5Connected
+                  ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300 hover:bg-emerald-900/60'
+                  : 'bg-amber-950/40 border-amber-500/40 text-amber-300 hover:bg-amber-900/40'
+              }`}
+              title="Open MT5 Institutional Execution Hub"
+            >
+              <Zap className="w-3.5 h-3.5 fill-current" />
+              <span>MT5 BOT</span>
+              <span className={`w-2 h-2 rounded-full ${isMt5Connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+            </button>
+          )}
+
           <div className="hidden lg:flex items-center gap-1.5">
             <span className="text-[11px] font-mono text-slate-400">Demos:</span>
             <button

@@ -129,3 +129,41 @@ export interface PresetScenario {
   }[];
   defaultContext: Partial<SessionContext>;
 }
+
+export type MT5Action = 'BUY' | 'SELL' | 'BUY_LIMIT' | 'SELL_LIMIT';
+export type MT5SignalStatus = 'PENDING' | 'SENT_TO_MT5' | 'EXECUTED' | 'CANCELLED' | 'REJECTED';
+
+export interface MT5Signal {
+  id: string;
+  createdAt: string;
+  symbol: string;
+  action: MT5Action;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit1: number;
+  takeProfit2: number;
+  lots: number;
+  magic: number;
+  comment: string;
+  source: string;
+  status: MT5SignalStatus;
+  ticketId?: number;
+  executedPrice?: number;
+  executedAt?: string;
+  errorMessage?: string;
+  validUntil?: string;
+}
+
+export interface MT5TerminalStatus {
+  connected: boolean;
+  lastHeartbeat: string | null;
+  terminalType: 'MQL5_EA' | 'PYTHON_BRIDGE' | 'NONE';
+  accountNumber?: string;
+  broker?: string;
+  balance?: number;
+  equity?: number;
+  currency?: string;
+  serverTime?: string;
+  pingMs?: number;
+}
+

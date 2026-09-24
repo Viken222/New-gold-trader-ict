@@ -1,21 +1,74 @@
 import React, { useState } from 'react';
 import { AnalysisResult } from '../types';
-import { Copy, Check, FileDown, Terminal, ShieldCheck, AlertCircle, ArrowUpRight, ArrowDownRight, MinusCircle } from 'lucide-react';
+import { Copy, Check, FileDown, Terminal, ShieldCheck, AlertCircle, ArrowUpRight, ArrowDownRight, MinusCircle, Zap } from 'lucide-react';
 import { ScorecardMatrix } from './ScorecardMatrix';
 import { QuadrantMeter } from './QuadrantMeter';
 
 interface AnalysisTerminalProps {
   result: AnalysisResult;
+  onOpenMt5Hub?: () => void;
 }
 
-export const AnalysisTerminal: React.FC<AnalysisTerminalProps> = ({ result }) => {
+export const AnalysisTerminal: React.FC<AnalysisTerminalProps> = ({ result, onOpenMt5Hub }) => {
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'all' | 'setup' | 'structure' | 'arrays' | 'triggers' | 'audit'>('all');
+  const [isSendingMt5, setIsSendingMt5] = useState(false);
+  const [mt5SentMsg, setMt5SentMsg] = useState<string | null>(null);
 
   const handleCopyTicket = () => {
     navigator.clipboard.writeText(result.ticket);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleSendToMt5 = async () => {
+    if (result.direction === 'STAND ASIDE') return;
+    setIsSendingMt5(true);
+    setMt5SentMsg(null);
+
+    try {
+      const entryMatch = result.entryZone.match(/(\d{3,4}\.\d{2})/);
+      const slMatch = result.stopLoss.match(/(\d{3,4}\.\d{2})/);
+      const tp1Match = result.tp1.match(/(\d{3,4}\.\d{2})/);
+      const tp2Match = result.tp2.match(/(\d{3,4}\.\d{2})/);
+      const lotsMatch = result.recommendedLots.match(/(\d+(\.\d+)?)/);
+
+      const entry = entryMatch ? parseFloat(entryMatch[1]) : 4285.00;
+      const sl = slMatch ? parseFloat(slMatch[1]) : (result.direction === 'LONG' ? entry - 4.5 : entry + 4.5);
+      const tp1 = tp1Match ? parseFloat(tp1Match[1]) : (result.direction === 'LONG' ? entry + 6.0 : entry - 6.0);
+      const tp2 = tp2Match ? parseFloat(tp2Match[1]) : (result.direction === 'LONG' ? entry + 15.0 : entry - 15.0);
+      const lots = lotsMatch ? parseFloat(lotsMatch[1]) : 0.10;
+
+      const action = result.direction === 'LONG' ? 'BUY_LIMIT' : 'SELL_LIMIT';
+
+      const res = await fetch('/api/mt5/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: 'XAUUSD',
+          action,
+          entryPrice: entry,
+          stopLoss: sl,
+          takeProfit1: tp1,
+          takeProfit2: tp2,
+          lots: Math.max(0.01, lots),
+          comment: `ICT:${result.archetype.split('—')[0].trim()}`,
+          source: `${result.mode} (${result.grade} Grade)`,
+        }),
+      });
+
+      const json = await res.json();
+      if (json.success) {
+        setMt5SentMsg('Dispatched to MT5!');
+        if (onOpenMt5Hub) onOpenMt5Hub();
+        setTimeout(() => setMt5SentMsg(null), 3000);
+      }
+    } catch {
+      setMt5SentMsg('Failed to push');
+      setTimeout(() => setMt5SentMsg(null), 3000);
+    } finally {
+      setIsSendingMt5(false);
+    }
   };
 
   const handleExportMarkdown = () => {
@@ -90,6 +143,17 @@ export const AnalysisTerminal: React.FC<AnalysisTerminalProps> = ({ result }) =>
           </div>
 
           <div className="flex items-center gap-2">
+            {result.direction !== 'STAND ASIDE' && (
+              <button
+                type="button"
+                disabled={isSendingMt5}
+                onClick={handleSendToMt5}
+                className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-mono text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer disabled:opacity-50"
+              >
+                <Zap className="w-3.5 h-3.5 fill-slate-950" />
+                {isSendingMt5 ? 'Sending...' : mt5SentMsg || 'Send to MT5'}
+              </button>
+            )}
             <button
               type="button"
               onClick={handleExportMarkdown}
